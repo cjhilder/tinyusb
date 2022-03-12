@@ -33,7 +33,6 @@ add_executable(msc_with_fatfs
 
 target_include_directories(msc_with_fatfs PUBLIC
 				${CMAKE_CURRENT_LIST_DIR})
-#target_compile_definitions(msc_with_fatfs PICO_USE_STACK_GUARDS=1 PICO_MALLOC_PANIC=1 PICO_CORE1_STACK_SIZE=0x4000)
 		
 target_link_libraries(
 					msc_with_fatfs
