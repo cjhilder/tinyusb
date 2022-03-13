@@ -20,7 +20,7 @@
   
 #include "tusb.h"
 
-#define TIMEOUT_WAIT_US 500000
+#define TIMEOUT_WAIT_US 5000000
 
 /* Status of Disk Functions */
 typedef BYTE	DSTATUS;

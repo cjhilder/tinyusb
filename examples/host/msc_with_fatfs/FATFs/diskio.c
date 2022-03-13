@@ -8,30 +8,14 @@
 #include "diskio.h"
 
 static DSTATUS disk_state[CFG_TUH_DEVICE_MAX];
-
-static DRESULT wait_for_io_complete(uint8_t usb_addr) {
-	// TODO with RTOS, this should use semaphore instead of blocking
-	uint64_t time_limit = time_us_64() + TIMEOUT_WAIT_US;
-	while (!tuh_msc_ready(usb_addr)) { 
-		#if CFG_TUSB_OS != OPT_OS_NONE
-		osal_task_delay(1);
-		#endif
-		if (time_us_64() > time_limit) {
-			return RES_ERROR;
-		}
-	}
-	return RES_OK;
-}
 	
 void diskio_init(void)
 {
 	memset(disk_state, STA_NOINIT, CFG_TUH_DEVICE_MAX);
 }
 
-
-
 /*-----------------------------------------------------------------------*/
-/* Inidialize a Drive                                                    */
+/* Initialize a Drive                                                    */
 
 DSTATUS disk_initialize (
 	BYTE drv				/* Physical drive nmuber (0..) */
@@ -55,18 +39,19 @@ DSTATUS disk_status (
 {
 	return disk_state[drv];
 }
+
+/*-----------------------------------------------------------------------*/
+/* Read Sector(s)                                                        */
+
 volatile bool read_flag;
 volatile bool write_flag;
 
 bool tuh_msc_read10_cb(uint8_t dev_addr, const msc_cbw_t *cbw, const msc_csw_t *csw) {
-	//printf("#");
 	read_flag = true;
 }
 bool tuh_msc_write10_cb(uint8_t dev_addr, const msc_cbw_t *cbw, const msc_csw_t *csw) {
  	write_flag = true;
 }
-/*-----------------------------------------------------------------------*/
-/* Read Sector(s)                                                        */
 
 DRESULT disk_read (
 	BYTE drv,		/* Physical drive nmuber (0..) */
@@ -75,24 +60,19 @@ DRESULT disk_read (
 	BYTE count		/* Number of sectors to read (1..255) */
 )
 {
-	//printf("R");
-	//printf(" - - - - - - - - - - - - - - - - - sector %x\n", sector);
 	uint8_t usb_addr = drv+1;
 	read_flag = false;
 	if ( !tuh_msc_read10(usb_addr, 0, buff, sector, count, tuh_msc_read10_cb)) {
 		return RES_ERROR;
 	}
-	//printf("-");
 	uint64_t time_limit = time_us_64() + TIMEOUT_WAIT_US;
 	while (!read_flag) { 
 		tuh_task(); 
 		if (time_us_64() > time_limit) {
-			puts("!"); __breakpoint();
 			return RES_ERROR;
 		}
 	}
-	//printf("r\n");
-	return RES_OK; // wait_for_io_complete(usb_addr);
+	return RES_OK;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -118,6 +98,7 @@ DRESULT disk_write (
 			return RES_ERROR;
 		}
 	}
+	return RES_OK;
 }
 #endif /* _READONLY */
 

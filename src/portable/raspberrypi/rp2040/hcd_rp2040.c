@@ -566,7 +566,8 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
         // Set pre if we are a low speed device on full speed hub
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
 
-        busy_wait_ms(1);
+        // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
+        busy_wait_ms(25); // <-- This has been added because it causes the code to work most of the time!
         usb_hw->sie_ctrl = flags;
     }else
     {
