@@ -1,3 +1,5 @@
+This is a fork of TinyUSB dedicated to getting host mode MSC working on RP2040. The goal is to make a RP2040 board that has a USB-A socket for a USB flash drive, and is able to read/write that drive. Significant progress has been made in this respect by `eskimo software <https://github.com/eskimo-software>`. I have been working on the integration with FatFs.
+
 .. figure:: docs/assets/logo.svg
    :alt: TinyUSB
 
