@@ -17,10 +17,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
-  
+#include "hardware/structs/usb.h"
+#include "hardware/address_mapped.h"
 #include "tusb.h"
+#define usb_hw_set   hw_set_alias(usb_hw)
 
-#define TIMEOUT_WAIT_US 5000000
+#define TIMEOUT_WAIT_US 500000
 
 /* Status of Disk Functions */
 typedef BYTE	DSTATUS;

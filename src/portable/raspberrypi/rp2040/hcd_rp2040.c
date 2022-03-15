@@ -64,6 +64,8 @@ enum {
                   USB_SIE_CTRL_PULLDOWN_EN_BITS | USB_SIE_CTRL_EP0_INT_1BUF_BITS
 };
 
+volatile uint64_t last_interrupt_requested_at = 0;
+
 static struct hw_endpoint *get_dev_ep(uint8_t dev_addr, uint8_t ep_addr)
 {
   uint8_t num = tu_edpt_number(ep_addr);
@@ -212,8 +214,9 @@ static void hw_trans_complete(void)
 static void hcd_rp2040_irq(void)
 {
     uint32_t status = usb_hw->ints;
-    uint32_t handled = 0;
-
+    volatile uint32_t handled = 0;
+    last_interrupt_requested_at = 0;
+    printf("Q[%x]", usb_hw->ints);
     TU_LOG(2, "+IRQ %08x %08x\n", status, usb_hw->intr);
 
     if (status & USB_INTS_HOST_CONN_DIS_BITS)
@@ -273,10 +276,12 @@ static void hcd_rp2040_irq(void)
 
     if (status ^ handled)
     {
-        panic("Unhandled IRQ 0x%x\n", (uint) (status ^ handled));
+        //printf("\nUnhandled IRQ 0x%x\n", (uint) (status ^ handled));
+        printf("U");
     }
 
     TU_LOG(2, "-IRQ\n");
+    printf("q");
 }
 
 static struct hw_endpoint *_next_free_ep(uint8_t transfer_type)
@@ -421,8 +426,8 @@ bool hcd_init(uint8_t rhport)
                    USB_INTE_TRANS_COMPLETE_BITS   |
                    USB_INTE_ERROR_RX_TIMEOUT_BITS |
                    USB_INTE_ERROR_DATA_SEQ_BITS   ;
-
-    const uint32_t nak_poll_delay = 100; // increase the spacing between NAK auto-retries
+    usb_hw->inte = 0b01111111111111111011;
+    const uint32_t nak_poll_delay = 1000; //0x10; // 100; // increase the spacing between NAK auto-retries
     usb_hw->nak_poll = (nak_poll_delay << USB_NAK_POLL_DELAY_FS_LSB) | (nak_poll_delay << USB_NAK_POLL_DELAY_LS_LSB);
 
     return true;
@@ -547,6 +552,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
 
       // Direction has flipped on endpoint control so re init it but with same properties
       _hw_endpoint_init(ep, dev_addr, ep_addr, ep->wMaxPacketSize, ep->transfer_type, 0);
+      printf(";");
     }
 
     pico_trace(" slot %d %s dev_addr %d, ep_addr 0x%x\n", ep_slot(ep), xfer_type_str(ep->transfer_type), dev_addr, ep_addr);
@@ -565,13 +571,20 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
                          (ep_dir ? USB_SIE_CTRL_RECEIVE_DATA_BITS : USB_SIE_CTRL_SEND_DATA_BITS);
         // Set pre if we are a low speed device on full speed hub
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
-
         // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
-        busy_wait_ms(25); // <-- This has been added because it causes the code to work most of the time!
+        //busy_wait_ms(25); // <-- This has been added because it causes the code to work most of the time!
+        printf(".[%x]", *(ep->buffer_control));
+        uint32_t saved = save_and_disable_interrupts();
+        last_interrupt_requested_at = time_us_64();
+        restore_interrupts(saved);
         usb_hw->sie_ctrl = flags;
+        //while (1) {
+        //}
+        //printf("[0x%x]", usb_hw->sie_status);
     }else
     {
       hw_endpoint_xfer_start(ep, buffer, buflen);
+      printf("&");
     }
 
     return true;

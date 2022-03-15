@@ -64,6 +64,7 @@ int main(void)
 
   printf("\fTinyUSB Host MSC with FatFs Example\n");
 
+  USB_state = USB_no_device;
   tusb_init();
 
   int loopCount =0;
@@ -124,12 +125,15 @@ int main(void)
         result = f_open(&file, "test-file.txt", FA_CREATE_ALWAYS | FA_WRITE);
         printf("opening test-file.txt (err=%d)\n", result);
         print_error_text(result);
+        if (result == FR_DISK_ERR) { tusb_init();   USB_state = USB_no_device; }
         result = f_write(&file, buffer, sizeof(buffer), &quantity);
         printf("writing (err=%d) with %d bytes written\n", result, quantity);
         print_error_text(result);
+        if (result == FR_DISK_ERR) { tusb_init();   USB_state = USB_no_device; }
         result =  f_close(&file);
         printf("closing (err=%d)\n", result);
         print_error_text(result);
+        if (result == FR_DISK_ERR) { tusb_init();   USB_state = USB_no_device;}
         printf("loop count %d \n\n\n", loopCount++);    
     }
   }

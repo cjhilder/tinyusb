@@ -454,15 +454,19 @@ bool tuh_init(uint8_t rhport)
  */
 void tuh_task(void)
 {
+  printf("T");
   // Skip if stack is not initialized
-  if ( !tusb_inited() ) return;
+  if ( !tusb_inited() ) { printf("~"); return; }
 
   // Loop until there is no more events in the queue
   while (1)
   {
     hcd_event_t event;
-    if ( !osal_queue_receive(_usbh_q, &event) ) return;
-
+    if ( !osal_queue_receive(_usbh_q, &event) ) { 
+      printf("t"); 
+      return; 
+    }
+    printf("=");
     switch (event.event_id)
     {
       case HCD_EVENT_DEVICE_ATTACH:
@@ -528,6 +532,7 @@ void tuh_task(void)
       default: break;
     }
   }
+  //printf("?");
 }
 
 //--------------------------------------------------------------------+
@@ -1210,6 +1215,7 @@ bool usbh_edpt_xfer(uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_
     return true;
   }else
   {
+    printf("+");
     // HCD error, mark endpoint as ready to allow next transfer
     dev->ep_status[epnum][dir].busy = false;
     dev->ep_status[epnum][dir].claimed = 0;

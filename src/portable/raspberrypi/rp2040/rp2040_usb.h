@@ -65,6 +65,8 @@ typedef struct hw_endpoint
 #endif
 } hw_endpoint_t;
 
+extern volatile uint64_t last_interrupt_requested_at;
+
 void rp2040_usb_init(void);
 
 void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t total_len);

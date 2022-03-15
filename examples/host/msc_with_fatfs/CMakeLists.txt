@@ -29,6 +29,7 @@ add_executable(msc_with_fatfs
 				FATFs/diskio.c
 				FATFs/ff.c
 				FATFs/ffunicode.c
+				C:/VSARM/sdk/pico/pico-sdk/lib/tinyusb/src/portable/raspberrypi/rp2040/rp2040_usb.c
 				)
 
 target_include_directories(msc_with_fatfs PUBLIC
