@@ -69,7 +69,7 @@ typedef struct
   msc_csw_t csw;
 }msch_interface_t;
 
-CFG_TUSB_MEM_SECTION static msch_interface_t _msch_itf[CFG_TUH_DEVICE_MAX];
+CFG_TUSB_MEM_SECTION /*static*/ msch_interface_t _msch_itf[CFG_TUH_DEVICE_MAX];
 
 // buffer used to read scsi information when mounted
 // largest response data currently is inquiry TODO Inquiry is not part of enum anymore

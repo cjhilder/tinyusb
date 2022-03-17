@@ -33,6 +33,7 @@
 #include "host/usbh_classdriver.h"
 #include "hub.h"
 
+#include "class/msc/msc_host.h"
 //--------------------------------------------------------------------+
 // USBH Configuration
 //--------------------------------------------------------------------+
@@ -1187,6 +1188,47 @@ bool usbh_edpt_release(uint8_t dev_addr, uint8_t ep_addr)
   return ret;
 }
 
+typedef struct
+{
+  uint8_t itf_num;
+  uint8_t ep_in;
+  uint8_t ep_out;
+
+  uint8_t max_lun;
+
+  volatile bool configured; // Receive SET_CONFIGURE
+  volatile bool mounted;    // Enumeration is complete
+
+  struct {
+    uint32_t block_size;
+    uint32_t block_count;
+  } capacity[CFG_TUH_MSC_MAXLUN];
+
+  //------------- SCSI -------------//
+  uint8_t stage;
+  void*   buffer;
+  tuh_msc_complete_cb_t complete_cb;
+
+  msc_cbw_t cbw;
+  msc_csw_t csw;
+}msch_interface_t;
+extern msch_interface_t _msch_itf[CFG_TUH_DEVICE_MAX];
+TU_ATTR_ALWAYS_INLINE
+static inline msch_interface_t* get_itf(uint8_t dev_addr)
+{
+  return &_msch_itf[dev_addr-1];
+}
+
+bool is_busy(uint8_t dev_addr){
+  return false;
+  msch_interface_t* p_msc = get_itf(dev_addr);
+  uint8_t ep_addr = p_msc->ep_out;
+  uint8_t const epnum = tu_edpt_number(ep_addr);
+  uint8_t const dir   = tu_edpt_dir(ep_addr);
+
+  usbh_device_t* dev = get_device(dev_addr);
+  return dev->ep_status[epnum][dir].busy;
+}
 // TODO has some duplication code with device, refactor later
 bool usbh_edpt_xfer(uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_t total_bytes)
 {

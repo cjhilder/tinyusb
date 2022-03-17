@@ -151,9 +151,11 @@ static void hw_handle_buff_status(void)
         remaining_buffers &= ~bit;
 
         struct hw_endpoint *ep = get_epx_ep();
+        #if CFG_TUSB_DEBUG
         assert(ep);
         assert(ep->active);
-
+        #endif
+        
         uint32_t ep_ctrl = *ep->endpoint_control;
         if (ep_ctrl & EP_CTRL_DOUBLE_BUFFERED_BITS)
         {
@@ -184,10 +186,12 @@ static void hw_handle_buff_status(void)
         }
     }
 
-    if (remaining_buffers)
-    {
-        panic("Unhandled buffer %d\n", remaining_buffers);
-    }
+    #if CFG_TUSB_DEBUG
+        if (remaining_buffers)
+        {
+            panic("Unhandled buffer %d\n", remaining_buffers);
+        }
+    #endif
 }
 
 static void hw_trans_complete(void)
@@ -197,8 +201,10 @@ static void hw_trans_complete(void)
     pico_trace("Sent setup packet\n");
 
     struct hw_endpoint *ep = get_epx_ep();
+    #if CFG_TUSB_DEBUG
     assert(ep);
     assert(ep->active);
+    #endif
 
     hw_xfer_complete(ep, XFER_RESULT_SUCCESS);
   }
@@ -209,12 +215,18 @@ static void hw_trans_complete(void)
   }
 }
 
-static void hcd_rp2040_irq(void)
+volatile alarm_id_t hcd_backup_timer;
+
+static void hcd_rp2040_irq_kernel(uint32_t status)
 {
-    uint32_t status = usb_hw->ints;
+    cancel_alarm(hcd_backup_timer);
+    //printf("Q");
     uint32_t handled = 0;
 
+    // usb_hw_set->sie_ctrl = USB_SIE_CTRL_SOF_EN_BITS; // This is an experiment, does no harm though.
+
     TU_LOG(2, "+IRQ %08x %08x\n", status, usb_hw->intr);
+    TU_LOG(3, "alarm has been cancelled %x\n", hcd_backup_timer);
 
     if (status & USB_INTS_HOST_CONN_DIS_BITS)
     {
@@ -267,7 +279,7 @@ static void hcd_rp2040_irq(void)
     if (status & USB_INTS_ERROR_DATA_SEQ_BITS)
     {
         usb_hw_clear->sie_status = USB_SIE_STATUS_DATA_SEQ_ERROR_BITS;
-        TU_LOG(3, "  Seq Error: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(*epx.buffer_control), tu_u32_high16(*epx.buffer_control));
+        TU_LOG(2, "  Seq Error: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(*epx.buffer_control), tu_u32_high16(*epx.buffer_control));
         panic("Data Seq Error \n");
     }
 
@@ -277,6 +289,98 @@ static void hcd_rp2040_irq(void)
     }
 
     TU_LOG(2, "-IRQ\n");
+    //printf("q");
+}
+char reportstring[512];
+void start_transaction(struct hw_endpoint* ep, uint32_t flags);
+bool IRQ_logging = false;
+
+static int64_t hcd_rp2040_timer_irq(alarm_id_t id, void* data) {
+    IRQ_logging = true;
+    hw_endpoint_t* ep = data;
+    printf("Originally\n");
+    printf(reportstring);
+    printf("Backup timer %d has fired with control [%x] status [%x] buffer status [%x] %x %x %x %x %x %x\n", id, usb_hw->sie_ctrl, usb_hw->sie_status, usb_hw->buf_status, usb_hw->dev_addr_ctrl, usb_hw->main_ctrl, usb_hw->sof_rd, usb_hw->int_ep_ctrl, usb_hw->buf_cpu_should_handle, usb_hw->muxing);
+    printf("Endpoints:\n");
+    for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
+    {
+        ep = &ep_pool[i];
+        if (ep->configured)
+        {
+            //break;
+            printf("(device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d\n", ep->dev_addr, ep->ep_addr,
+            *ep->endpoint_control, *ep->buffer_control, 
+            ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len);
+        }
+    }
+
+    /*
+    Backup timer 2 has fired with status [50000205] buffer status [0] endpoint control reg [ef] buffer control reg [35] rx 1f type bulk remaining 513
+    */
+    //usb_hw_clear->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS;
+    busy_wait_us(1);
+    //usb_hw_set->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS; 
+    //usb_hw_set->sie_ctrl = USB_SIE_CTRL_RESET_BUS_BITS;
+    usb_hw_set->sie_ctrl = USB_SIE_CTRL_STOP_TRANS_BITS;
+    busy_wait_us(10);
+    start_transaction(ep, usb_hw->sie_ctrl | USB_SIE_CTRL_START_TRANS_BITS);   
+    return 4000000;
+
+    /*
+    busy_wait_ms(1000);
+    #if CFG_TUSB_DEBUG
+    __breakpoint();
+    #endif
+    */
+
+
+    uint32_t calculated_ints = USB_INTS_BUFF_STATUS_BITS;
+    uint32_t actual_status = usb_hw->sie_status;
+    if (actual_status & USB_SIE_STATUS_TRANS_COMPLETE_BITS) {
+        calculated_ints |= USB_INTS_TRANS_COMPLETE_BITS;
+    } 
+    if (actual_status & USB_SIE_STATUS_DATA_SEQ_ERROR_BITS) {
+        calculated_ints |= USB_INTS_ERROR_DATA_SEQ_BITS;
+    } 
+    if (actual_status & USB_SIE_STATUS_RX_TIMEOUT_BITS) {
+        calculated_ints |= USB_INTS_ERROR_RX_TIMEOUT_BITS;
+    } 
+    if (actual_status & USB_SIE_STATUS_STALL_REC_BITS) {
+        calculated_ints |= USB_INTS_STALL_BITS;
+    } 
+    hcd_rp2040_irq_kernel(calculated_ints);
+    return 0;
+}
+
+static void hcd_rp2040_irq(void) {
+    if (IRQ_logging) {
+        struct hw_endpoint *ep;
+        for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
+        {
+            ep = &ep_pool[i];
+            if (ep->configured)
+            {
+                //break;
+                printf("\nIRQ originally\n");
+                printf(reportstring);
+                printf("IRQ [%x] status [%x] buf status [%x] %x %x %x %x %x %x\n", usb_hw->ints, usb_hw->sie_status, usb_hw->buf_status, usb_hw->dev_addr_ctrl, usb_hw->main_ctrl, usb_hw->sof_rd, usb_hw->int_ep_ctrl, usb_hw->buf_cpu_should_handle, usb_hw->muxing);
+                for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
+                {
+                    ep = &ep_pool[i];
+                    if (ep->configured)
+                    {
+                        //break;
+                        printf("(device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d\n", ep->dev_addr, ep->ep_addr,
+                        *ep->endpoint_control, *ep->buffer_control, 
+                        ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len);
+                    }
+                }
+            }
+        }
+    }
+    
+
+    hcd_rp2040_irq_kernel(usb_hw->ints);
 }
 
 static struct hw_endpoint *_next_free_ep(uint8_t transfer_type)
@@ -303,7 +407,9 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
     struct hw_endpoint *ep = NULL;
 
     ep = _next_free_ep(transfer_type);
+    #if CFG_TUSB_DEBUG
     assert(ep);
+    #endif
 
     if (transfer_type == TUSB_XFER_INTERRUPT)
     {
@@ -330,9 +436,11 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
 static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t ep_addr, uint wMaxPacketSize, uint8_t transfer_type, uint8_t bmInterval)
 {
     // Already has data buffer, endpoint control, and buffer control allocated at this point
+    #if CFG_TUSB_DEBUG
     assert(ep->endpoint_control);
     assert(ep->buffer_control);
     assert(ep->hw_data_buf);
+    #endif
 
     uint8_t const num = tu_edpt_number(ep_addr);
     tusb_dir_t const dir = tu_edpt_dir(ep_addr);
@@ -352,7 +460,9 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t 
     pico_trace("dev %d ep %d %s setup buffer @ 0x%p\n", ep->dev_addr, tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)], ep->hw_data_buf);
     uint dpram_offset = hw_data_offset(ep->hw_data_buf);
     // Bits 0-5 should be 0
+    #if CFG_TUSB_DEBUG
     assert(!(dpram_offset & 0b111111));
+    #endif
 
     // Fill in endpoint control register with buffer offset
     uint32_t ep_reg =  EP_CTRL_ENABLE_BITS
@@ -398,7 +508,9 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t 
 bool hcd_init(uint8_t rhport)
 {
     pico_trace("hcd_init %d\n", rhport);
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
 
     // Reset any previous state
     rp2040_usb_init();
@@ -422,7 +534,7 @@ bool hcd_init(uint8_t rhport)
                    USB_INTE_ERROR_RX_TIMEOUT_BITS |
                    USB_INTE_ERROR_DATA_SEQ_BITS   ;
 
-    const uint32_t nak_poll_delay = 100; // increase the spacing between NAK auto-retries
+    const uint32_t nak_poll_delay = 125; // increase the spacing between NAK auto-retries
     usb_hw->nak_poll = (nak_poll_delay << USB_NAK_POLL_DELAY_FS_LSB) | (nak_poll_delay << USB_NAK_POLL_DELAY_LS_LSB);
 
     return true;
@@ -431,20 +543,27 @@ bool hcd_init(uint8_t rhport)
 void hcd_port_reset(uint8_t rhport)
 {
     pico_trace("hcd_port_reset\n");
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
     // TODO: Nothing to do here yet. Perhaps need to reset some state?
 }
 
 bool hcd_port_connect_status(uint8_t rhport)
 {
     pico_trace("hcd_port_connect_status\n");
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
+
     return usb_hw->sie_status & USB_SIE_STATUS_SPEED_BITS;
 }
 
 tusb_speed_t hcd_port_speed_get(uint8_t rhport)
 {
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
     // TODO: Should enumval this register
     switch (dev_speed())
     {
@@ -493,14 +612,18 @@ uint32_t hcd_frame_number(uint8_t rhport)
 
 void hcd_int_enable(uint8_t rhport)
 {
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
     irq_set_enabled(USBCTRL_IRQ, true);
 }
 
 void hcd_int_disable(uint8_t rhport)
 {
     // todo we should check this is disabling from the correct core; note currently this is never called
+    #if CFG_TUSB_DEBUG
     assert(rhport == 0);
+    #endif
     irq_set_enabled(USBCTRL_IRQ, false);
 }
 
@@ -527,6 +650,48 @@ bool hcd_edpt_open(uint8_t rhport, uint8_t dev_addr, tusb_desc_endpoint_t const 
     return true;
 }
 
+bool is_valid_buffer(uint32_t bufctrl, uint32_t epctrl, uint32_t siectrl) {
+    bool is_in = siectrl & (1 << 3);
+    bool is_out = siectrl & (1 << 2);
+    if ((is_in && is_out) || (!is_in && !is_out)) return false;
+    bool is_full0 = bufctrl & (1 << 15);
+    bool is_available0 = bufctrl & (1 << 10);
+    bool is_full1 = bufctrl & (1 << 31);
+    bool is_available1 = bufctrl & (1 << 26);
+    bool is_doublebuf = epctrl & (1 << 30);
+    //printf("double? %x full? %x, avail? %x", is_doublebuf, is_full0, is_available0);
+    //printf(" full? %x, avail? %x", is_full1, is_available1);
+    //printf("\n");
+    bool test_buf0;
+    bool test_buf1;
+
+    if (is_in) {
+        test_buf0 = (!is_full0 && is_available0);
+        test_buf1 = (!is_full1 && is_available1);
+    } else {
+        test_buf0 = (is_full0 && is_available0);
+        test_buf1 = (is_full1 && is_available1);
+    }
+    if (is_doublebuf) return test_buf0 && test_buf1 ;
+    else return test_buf0 ;
+}
+
+void start_transaction(struct hw_endpoint* ep, uint32_t flags) {
+        // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
+        // usb_hw_clear->sie_ctrl = USB_SIE_CTRL_SOF_EN_BITS;  // This is an experiment, does no harm though.
+
+
+        assert(is_valid_buffer(*ep->buffer_control, *ep->endpoint_control, flags)==true);
+        if (!is_valid_buffer(*ep->buffer_control, *ep->endpoint_control, flags)) printf("FAIL!!!!\n");
+
+        sprintf(reportstring, "About to init trans ctrl [%x] with status [%x] buffer status [%x] (device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d) %x %x %x %x %x %x\n", flags, usb_hw->sie_status, usb_hw->buf_status, ep->dev_addr, ep->ep_addr,
+            *ep->endpoint_control, *ep->buffer_control, 
+            ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len, usb_hw->dev_addr_ctrl, usb_hw->main_ctrl, usb_hw->sof_rd, usb_hw->int_ep_ctrl, usb_hw->buf_cpu_should_handle, usb_hw->muxing);
+
+        //busy_wait_us(1); // <-- This has been added because it causes the code to work most of the time!
+        usb_hw->sie_ctrl = flags;
+}
+
 bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_t buflen)
 {
     (void) rhport;
@@ -538,12 +703,17 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
 
     // Get appropriate ep. Either EPX or interrupt endpoint
     struct hw_endpoint *ep = get_dev_ep(dev_addr, ep_addr);
+    
+    #if CFG_TUSB_DEBUG
     assert(ep);
+    #endif
 
     // Control endpoint can change direction 0x00 <-> 0x80
     if ( ep_addr != ep->ep_addr )
     {
+      #if CFG_TUSB_DEBUG
       assert(ep_num == 0);
+      #endif
 
       // Direction has flipped on endpoint control so re init it but with same properties
       _hw_endpoint_init(ep, dev_addr, ep_addr, ep->wMaxPacketSize, ep->transfer_type, 0);
@@ -565,10 +735,10 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
                          (ep_dir ? USB_SIE_CTRL_RECEIVE_DATA_BITS : USB_SIE_CTRL_SEND_DATA_BITS);
         // Set pre if we are a low speed device on full speed hub
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
-
-        // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
-        busy_wait_ms(2); // <-- This has been added because it causes the code to work most of the time!
-        usb_hw->sie_ctrl = flags;
+        //#define ALARM 500 // release with no logging
+        #define ALARM 4000000
+        hcd_backup_timer = add_alarm_in_us(ALARM, hcd_rp2040_timer_irq, 0, ep);
+        start_transaction(ep, flags);
     }else
     {
       hw_endpoint_xfer_start(ep, buffer, buflen);
@@ -591,7 +761,9 @@ bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet
 
     // EP0 out
     _hw_endpoint_init(ep, dev_addr, 0x00, ep->wMaxPacketSize, 0, 0);
+    #if CFG_TUSB_DEBUG
     assert(ep->configured);
+    #endif
 
     ep->remaining_len = 8;
     ep->active        = true;
@@ -628,7 +800,7 @@ bool hcd_edpt_clear_stall(uint8_t dev_addr, uint8_t ep_addr)
     (void) dev_addr;
     (void) ep_addr;
 
-    panic("hcd_clear_stall");
+    TU_LOG(1, "hcd_clear_stall");
     return true;
 }
 

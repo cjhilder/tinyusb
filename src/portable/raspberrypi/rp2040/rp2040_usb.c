@@ -86,12 +86,12 @@ void _hw_endpoint_buffer_control_update32(struct hw_endpoint *ep, uint32_t and_m
         value |= or_mask;
         if (or_mask & USB_BUF_CTRL_AVAIL) {
             if (*ep->buffer_control & USB_BUF_CTRL_AVAIL) {
-                panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
+                TU_LOG(1, "!!!! WARNING: ep %d %s was already available\n", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
             }
+#if (!CFG_TUH_ENABLED) || true
             *ep->buffer_control = value & ~USB_BUF_CTRL_AVAIL;
             // 12 cycle delay.. (should be good for 48*12Mhz = 576Mhz)
             // Don't need delay in host mode as host is in charge
-#if !CFG_TUH_ENABLED
             __asm volatile (
                     "b 1f\n"
                     "1: b 1f\n"
@@ -216,14 +216,18 @@ static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
   {
     // We are continuing a transfer here. If we are TX, we have successfully
     // sent some data can increase the length we have sent
+    #if CFG_TUSB_DEBUG
     assert(!(buf_ctrl & USB_BUF_CTRL_FULL));
+    #endif
 
     ep->xferred_len = (uint16_t)(ep->xferred_len + xferred_bytes);
   }else
   {
     // If we have received some data, so can increase the length
     // we have received AFTER we have copied it to the user buffer at the appropriate offset
+    #if CFG_TUSB_DEBUG
     assert(buf_ctrl & USB_BUF_CTRL_FULL);
+    #endif
 
     memcpy(ep->user_buf, ep->hw_data_buf + buf_id*64, xferred_bytes);
     ep->xferred_len = (uint16_t)(ep->xferred_len + xferred_bytes);
@@ -298,7 +302,8 @@ bool hw_endpoint_xfer_continue(struct hw_endpoint *ep)
   // Part way through a transfer
   if (!ep->active)
   {
-    panic("Can't continue xfer on inactive ep %d %s", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
+    TU_LOG(1, "WARNING: Can't continue xfer on inactive ep %d %s", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
+    return false;
   }
 
   // Update EP struct from hardware state
