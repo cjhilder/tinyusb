@@ -153,7 +153,7 @@ static void hw_handle_buff_status(void)
         struct hw_endpoint *ep = get_epx_ep();
         assert(ep);
         assert(ep->active);
-
+        
         uint32_t ep_ctrl = *ep->endpoint_control;
         if (ep_ctrl & EP_CTRL_DOUBLE_BUFFERED_BITS)
         {
@@ -184,10 +184,10 @@ static void hw_handle_buff_status(void)
         }
     }
 
-    if (remaining_buffers)
-    {
-        panic("Unhandled buffer %d\n", remaining_buffers);
-    }
+        if (remaining_buffers)
+        {
+            panic("Unhandled buffer %d\n", remaining_buffers);
+        }
 }
 
 static void hw_trans_complete(void)
@@ -308,7 +308,7 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
     if (transfer_type == TUSB_XFER_INTERRUPT)
     {
         pico_info("Allocate interrupt ep slot %d int %d\n", ep_slot(ep), ep->interrupt_num);
-        ep->buffer_control = &usbh_dpram->int_ep_buffer_ctrl[ep->interrupt_num].ctrl;
+        ep->buffer_control = (io_rw_16*)&usbh_dpram->int_ep_buffer_ctrl[ep->interrupt_num].ctrl;
         ep->endpoint_control = &usbh_dpram->int_ep_ctrl[ep->interrupt_num].ctrl;
         // 0 for epx (double buffered): TODO increase to 1024 for ISO
         // 2x64 for intep0
@@ -319,7 +319,7 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
     else
     {
         pico_info("Allocate ep slot %d\n", ep_slot(ep));
-        ep->buffer_control = &usbh_dpram->epx_buf_ctrl;
+        ep->buffer_control = (io_rw_16*)&usbh_dpram->epx_buf_ctrl;
         ep->endpoint_control = &usbh_dpram->epx_ctrl;
         ep->hw_data_buf = &usbh_dpram->epx_data[0];
     }
@@ -425,7 +425,7 @@ bool hcd_init(uint8_t rhport)
     const uint32_t nak_poll_delay = 100; // increase the spacing between NAK auto-retries
     usb_hw->nak_poll = (nak_poll_delay << USB_NAK_POLL_DELAY_FS_LSB) | (nak_poll_delay << USB_NAK_POLL_DELAY_LS_LSB);
 
-    return true;
+    return true; 
 }
 
 void hcd_port_reset(uint8_t rhport)
@@ -567,7 +567,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
 
         // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
-        busy_wait_ms(2); // <-- This has been added because it causes the code to work most of the time!
+        //busy_wait_ms(2); // <-- This has been added because it causes the code to work most of the time!
         usb_hw->sie_ctrl = flags;
     }else
     {

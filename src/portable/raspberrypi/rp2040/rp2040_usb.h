@@ -20,6 +20,19 @@
 #define pico_info(...)  TU_LOG(2, __VA_ARGS__)
 #define pico_trace(...) TU_LOG(3, __VA_ARGS__)
 
+typedef struct buffer_control_value {
+    io_rw_16 value;
+    uint8_t  index;
+} buffer_control_value_t;
+
+typedef enum {
+    BUF_CTRL_OP_AND,
+    BUF_CTRL_OP_OR,
+    BUF_CTRL_OP_SET_MASK,
+    BUF_CTRL_OP_CLR_MASK
+
+} buf_ctrl_op_t;
+
 // Hardware information per endpoint
 typedef struct hw_endpoint
 {
@@ -37,7 +50,7 @@ typedef struct hw_endpoint
     io_rw_32 *endpoint_control;
 
     // Buffer control register
-    io_rw_32 *buffer_control;
+    io_rw_16 *buffer_control;
 
     // Buffer pointer in usb dpram
     uint8_t *hw_data_buf;
@@ -71,18 +84,18 @@ void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t to
 bool hw_endpoint_xfer_continue(struct hw_endpoint *ep);
 void hw_endpoint_reset_transfer(struct hw_endpoint *ep);
 
-void _hw_endpoint_buffer_control_update32(struct hw_endpoint *ep, uint32_t and_mask, uint32_t or_mask);
-static inline uint32_t _hw_endpoint_buffer_control_get_value32(struct hw_endpoint *ep) {
+void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t op, buffer_control_value_t val);
+static inline io_rw_32 _hw_endpoint_buffer_control_get_value32(struct hw_endpoint *ep) {
     return *ep->buffer_control;
 }
-static inline void _hw_endpoint_buffer_control_set_value32(struct hw_endpoint *ep, uint32_t value) {
-    return _hw_endpoint_buffer_control_update32(ep, 0, value);
+static inline void _hw_endpoint_buffer_control_set_value16(struct hw_endpoint *ep, buffer_control_value_t value) {
+    return _hw_endpoint_buffer_control_update16(ep, BUF_CTRL_OP_OR, value);
 }
-static inline void _hw_endpoint_buffer_control_set_mask32(struct hw_endpoint *ep, uint32_t value) {
-    return _hw_endpoint_buffer_control_update32(ep, ~value, value);
+static inline void _hw_endpoint_buffer_control_set_mask16(struct hw_endpoint *ep, buffer_control_value_t value) {
+    return _hw_endpoint_buffer_control_update16(ep, BUF_CTRL_OP_SET_MASK, value);
 }
-static inline void _hw_endpoint_buffer_control_clear_mask32(struct hw_endpoint *ep, uint32_t value) {
-    return _hw_endpoint_buffer_control_update32(ep, ~value, 0);
+static inline void _hw_endpoint_buffer_control_clear_mask32(struct hw_endpoint *ep, buffer_control_value_t value) {
+    return _hw_endpoint_buffer_control_update16(ep, BUF_CTRL_OP_CLR_MASK, value);
 }
 
 static inline uintptr_t hw_data_offset(uint8_t *buf)

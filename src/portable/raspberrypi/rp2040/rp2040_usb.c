@@ -77,43 +77,50 @@ void hw_endpoint_reset_transfer(struct hw_endpoint *ep)
   ep->user_buf = 0;
 }
 
-void _hw_endpoint_buffer_control_update32(struct hw_endpoint *ep, uint32_t and_mask, uint32_t or_mask) {
-    uint32_t value = 0;
+void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t op, buffer_control_value_t val) {
+    io_rw_16 ctrl_value = 0;
+    io_rw_16 and_mask = 0;
+    io_rw_16 or_mask = 0;
+    io_rw_16 current = ep->buffer_control[val.index];
+    switch (op) {
+      case BUF_CTRL_OP_AND:
+        and_mask = val.value;
+        break;
+      case BUF_CTRL_OP_OR:
+        or_mask = val.value;
+        break;
+      case BUF_CTRL_OP_SET_MASK:
+        and_mask = ~val.value;
+        or_mask = val.value;
+        break;
+      case BUF_CTRL_OP_CLR_MASK:
+        and_mask = ~val.value;
+        break;
+    }
     if (and_mask) {
-        value = *ep->buffer_control & and_mask;
+        ctrl_value = current & and_mask;
     }
     if (or_mask) {
-        value |= or_mask;
+        ctrl_value |= or_mask;
         if (or_mask & USB_BUF_CTRL_AVAIL) {
-            if (*ep->buffer_control & USB_BUF_CTRL_AVAIL) {
+            if (current & USB_BUF_CTRL_AVAIL) {
                 panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
             }
-            *ep->buffer_control = value & ~USB_BUF_CTRL_AVAIL;
-            // 12 cycle delay.. (should be good for 48*12Mhz = 576Mhz)
-            // Don't need delay in host mode as host is in charge
-#if !CFG_TUH_ENABLED
-            __asm volatile (
-                    "b 1f\n"
-                    "1: b 1f\n"
-                    "1: b 1f\n"
-                    "1: b 1f\n"
-                    "1: b 1f\n"
-                    "1: b 1f\n"
-                    "1:\n"
-                    : : : "memory");
-#endif
+
         }
     }
-    *ep->buffer_control = value;
+    ep->buffer_control[val.index] = (ctrl_value & ~USB_BUF_CTRL_AVAIL) | (current & USB_BUF_CTRL_AVAIL);
+    asm volatile("nop \n nop \n nop");
+    ep->buffer_control[val.index] = ctrl_value;
 }
 
 // prepare buffer, return buffer control
-static uint32_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
+static buffer_control_value_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
   uint16_t const buflen = tu_min16(ep->remaining_len, ep->wMaxPacketSize);
   ep->remaining_len = (uint16_t)(ep->remaining_len - buflen);
 
-  uint32_t buf_ctrl = buflen | USB_BUF_CTRL_AVAIL;
+  io_rw_16 buf_ctrl = buflen | USB_BUF_CTRL_AVAIL;
 
   // PID
   buf_ctrl |= ep->next_pid ? USB_BUF_CTRL_DATA1_PID : USB_BUF_CTRL_DATA0_PID;
@@ -137,18 +144,23 @@ static uint32_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
     buf_ctrl |= USB_BUF_CTRL_LAST;
   }
 
-  if (buf_id) buf_ctrl = buf_ctrl << 16;
-
-  return buf_ctrl;
+  buffer_control_value_t result;
+  result.value = buf_ctrl;
+  result.index = buf_id;
+  return result;
 }
 
 // Prepare buffer control register value
 static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 {
   uint32_t ep_ctrl = *ep->endpoint_control;
-
+  buffer_control_value_t buf_ctrl_0;
+  buffer_control_value_t buf_ctrl_1;
+  bool double_buffered = false;
+  
   // always compute and start with buffer 0
-  uint32_t buf_ctrl = prepare_ep_buffer(ep, 0) | USB_BUF_CTRL_SEL;
+  buf_ctrl_0 = prepare_ep_buffer(ep, 0);
+  buf_ctrl_0.value |= USB_BUF_CTRL_SEL;
 
   // For now: skip double buffered for Device mode, OUT endpoint since
   // host could send < 64 bytes and cause short packet on buffer0
@@ -159,8 +171,8 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
   {
     // Use buffer 1 (double buffered) if there is still data
     // TODO: Isochronous for buffer1 bit-field is different than CBI (control bulk, interrupt)
-
-    buf_ctrl |= prepare_ep_buffer(ep, 1);
+    double_buffered = true;
+    buffer_control_value_t buf_ctrl_1 = prepare_ep_buffer(ep, 1);
 
     // Set endpoint control double buffered bit if needed
     ep_ctrl &= ~EP_CTRL_INTERRUPT_PER_BUFFER;
@@ -178,7 +190,8 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 
   // Finally, write to buffer_control which will trigger the transfer
   // the next time the controller polls this dpram address
-  _hw_endpoint_buffer_control_set_value32(ep, buf_ctrl);
+  _hw_endpoint_buffer_control_set_value16(ep, buf_ctrl_0);
+  if (double_buffered) _hw_endpoint_buffer_control_set_value16(ep, buf_ctrl_1);
 }
 
 void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t total_len)
