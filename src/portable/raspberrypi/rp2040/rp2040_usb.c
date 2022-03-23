@@ -81,6 +81,7 @@ void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t 
     io_rw_16 ctrl_value = 0;
     io_rw_16 and_mask = 0;
     io_rw_16 or_mask = 0;
+    assert(val.index < 2);
     io_rw_16 current = ep->buffer_control[val.index];
     switch (op) {
       case BUF_CTRL_OP_AND:
@@ -102,14 +103,15 @@ void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t 
     }
     if (or_mask) {
         ctrl_value |= or_mask;
-        if (or_mask & USB_BUF_CTRL_AVAIL) {
-            if (current & USB_BUF_CTRL_AVAIL) {
-                panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
-            }
-
-        }
     }
-    ep->buffer_control[val.index] = (ctrl_value & ~USB_BUF_CTRL_AVAIL) | (current & USB_BUF_CTRL_AVAIL);
+    // We absolutely cannot ever *write* to the buffer control register
+    // whilst it is accessible to the controller. Therefore we must abort
+    // the write if AVAIL bit is set, or wait for it to be cleared by the controller. 
+    // The option chosen here is abort.
+    if (current & USB_BUF_CTRL_AVAIL) {
+      panic("ep %d %s (buffer %d) was in use by controller", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]), val.index;
+    }
+    ep->buffer_control[val.index] = ctrl_value & ~USB_BUF_CTRL_AVAIL;
     asm volatile("nop \n nop \n nop");
     ep->buffer_control[val.index] = ctrl_value;
 }
@@ -154,8 +156,8 @@ static buffer_control_value_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t 
 static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 {
   uint32_t ep_ctrl = *ep->endpoint_control;
-  buffer_control_value_t buf_ctrl_0;
-  buffer_control_value_t buf_ctrl_1;
+  buffer_control_value_t buf_ctrl_0 = {.value = 0, .index = 0};
+  buffer_control_value_t buf_ctrl_1 = {.value = 0, .index = 1};
   bool double_buffered = false;
   
   // always compute and start with buffer 0
@@ -172,7 +174,7 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
     // Use buffer 1 (double buffered) if there is still data
     // TODO: Isochronous for buffer1 bit-field is different than CBI (control bulk, interrupt)
     double_buffered = true;
-    buffer_control_value_t buf_ctrl_1 = prepare_ep_buffer(ep, 1);
+    buf_ctrl_1 = prepare_ep_buffer(ep, 1);
 
     // Set endpoint control double buffered bit if needed
     ep_ctrl &= ~EP_CTRL_INTERRUPT_PER_BUFFER;
@@ -186,7 +188,7 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 
   *ep->endpoint_control = ep_ctrl;
 
-  TU_LOG(3, "  Prepare BufCtrl: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(buf_ctrl), tu_u32_high16(buf_ctrl));
+  TU_LOG(3, "  Prepare BufCtrl: (double=%d) [buf0] = 0x%x  [buf1] = 0x%x\r\n", double_buffered, buf_ctrl_0.value, buf_ctrl_1.value);
 
   // Finally, write to buffer_control which will trigger the transfer
   // the next time the controller polls this dpram address
@@ -220,10 +222,11 @@ void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t to
 // sync endpoint buffer and return transferred bytes
 static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
-  uint32_t buf_ctrl = _hw_endpoint_buffer_control_get_value32(ep);
-  if (buf_id)  buf_ctrl = buf_ctrl >> 16;
+  volatile io_rw_16 buf_ctrl = _hw_endpoint_buffer_control_get_value16(ep, buf_id);
 
   uint16_t xferred_bytes = buf_ctrl & USB_BUF_CTRL_LEN_MASK;
+
+  if (xferred_bytes == 0) return 0;
 
   if ( !ep->rx )
   {
@@ -259,8 +262,9 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
   // Update hw endpoint struct with info from hardware
   // after a buff status interrupt
 
-  uint32_t __unused buf_ctrl = _hw_endpoint_buffer_control_get_value32(ep);
-  TU_LOG(3, "  Sync BufCtrl: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(buf_ctrl), tu_u32_high16(buf_ctrl));
+  io_rw_16 __unused buf_ctrl_0 = _hw_endpoint_buffer_control_get_value16(ep, 0);
+  io_rw_16 __unused buf_ctrl_1 = _hw_endpoint_buffer_control_get_value16(ep, 1);
+  TU_LOG(3, "  Sync BufCtrl: [0] = 0x%x  [1] = 0x%x\r\n", buf_ctrl_0, buf_ctrl_1);
 
   // always sync buffer 0
   uint16_t buf0_bytes = sync_ep_buffer(ep, 0);
@@ -268,12 +272,12 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
   // sync buffer 1 if double buffered
   if ( (*ep->endpoint_control) & EP_CTRL_DOUBLE_BUFFERED_BITS )
   {
-    if (buf0_bytes == ep->wMaxPacketSize)
-    {
+    //if (buf0_bytes == ep->wMaxPacketSize)
+    //{
       // sync buffer 1 if not short packet
       sync_ep_buffer(ep, 1);
-    }else
-    {
+    //}else
+    //{
       // short packet on buffer 0
       // TODO couldn't figure out how to handle this case which happen with net_lwip_webserver example
       // At this time (currently trigger per 2 buffer), the buffer1 is probably filled with data from
@@ -300,7 +304,7 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
       TU_LOG(3, "----SHORT PACKET buffer0 on EP %02X:\r\n", ep->ep_addr);
       TU_LOG(3, "  BufCtrl: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(buf_ctrl), tu_u32_high16(buf_ctrl));
 #endif
-    }
+    //}
   }
 }
 

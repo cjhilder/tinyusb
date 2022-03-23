@@ -85,8 +85,10 @@ bool hw_endpoint_xfer_continue(struct hw_endpoint *ep);
 void hw_endpoint_reset_transfer(struct hw_endpoint *ep);
 
 void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t op, buffer_control_value_t val);
-static inline io_rw_32 _hw_endpoint_buffer_control_get_value32(struct hw_endpoint *ep) {
-    return *ep->buffer_control;
+
+static inline io_rw_16 _hw_endpoint_buffer_control_get_value16(struct hw_endpoint *ep, uint8_t buf_id) {
+    assert(buf_id < 2);
+    return ep->buffer_control[buf_id];
 }
 static inline void _hw_endpoint_buffer_control_set_value16(struct hw_endpoint *ep, buffer_control_value_t value) {
     return _hw_endpoint_buffer_control_update16(ep, BUF_CTRL_OP_OR, value);
