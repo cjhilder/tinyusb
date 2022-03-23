@@ -522,6 +522,10 @@ void tuh_task(void)
       }
       break;
 
+      case HCD_EVENT_RESET_ALL:
+        hcd_init(0);
+        break;
+
       case USBH_EVENT_FUNC_CALL:
         if ( event.func_call.func ) event.func_call.func(event.func_call.param);
       break;
@@ -1240,7 +1244,7 @@ bool usbh_edpt_xfer(uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_
   TU_LOG2("  Queue dev %d EP %02X with %u bytes ...\n", dev_addr, ep_addr, total_bytes);
 
   // Attempt to transfer on a busy endpoint, sound like an race condition !
-  TU_ASSERT(dev->ep_status[epnum][dir].busy == 0);
+  if (dev->ep_status[epnum][dir].busy != 0) return false;
 
   // Set busy first since the actual transfer can be complete before hcd_edpt_xfer()
   // could return and USBH task can preempt and clear the busy

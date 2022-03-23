@@ -215,11 +215,11 @@ static void hw_trans_complete(void)
   }
 }
 
-volatile alarm_id_t hcd_backup_timer;
+volatile alarm_id_t hcd_backup_timer = -1;
 
 static void hcd_rp2040_irq_kernel(uint32_t status)
 {
-    cancel_alarm(hcd_backup_timer);
+    if (hcd_backup_timer > (-1)) cancel_alarm(hcd_backup_timer);
     //printf("Q");
     uint32_t handled = 0;
 
@@ -296,21 +296,17 @@ void start_transaction(struct hw_endpoint* ep, uint32_t flags);
 bool IRQ_logging = false;
 
 static int64_t hcd_rp2040_timer_irq(alarm_id_t id, void* data) {
-    IRQ_logging = true;
-    hw_endpoint_t* ep = data;
-    printf("Originally\n");
-    printf(reportstring);
-    printf("Backup timer %d has fired with control [%x] status [%x] buffer status [%x] %x %x %x %x %x %x\n", id, usb_hw->sie_ctrl, usb_hw->sie_status, usb_hw->buf_status, usb_hw->dev_addr_ctrl, usb_hw->main_ctrl, usb_hw->sof_rd, usb_hw->int_ep_ctrl, usb_hw->buf_cpu_should_handle, usb_hw->muxing);
-    printf("Endpoints:\n");
+    uint8_t dir = (uint8_t) data;
+    hw_endpoint_t* ep;
     for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
     {
         ep = &ep_pool[i];
-        if (ep->configured)
+        if (ep->configured && ep->rx == dir)
         {
-            //break;
-            printf("(device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d\n", ep->dev_addr, ep->ep_addr,
-            *ep->endpoint_control, *ep->buffer_control, 
-            ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len);
+            break;
+            //printf("(device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d\n", ep->dev_addr, ep->ep_addr,
+            //*ep->endpoint_control, *ep->buffer_control, 
+            //ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len);
         }
     }
 
@@ -318,41 +314,21 @@ static int64_t hcd_rp2040_timer_irq(alarm_id_t id, void* data) {
     Backup timer 2 has fired with status [50000205] buffer status [0] endpoint control reg [ef] buffer control reg [35] rx 1f type bulk remaining 513
     */
     //usb_hw_clear->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS;
-    busy_wait_us(1);
+    //busy_wait_us(1);
     //usb_hw_set->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS; 
     //usb_hw_set->sie_ctrl = USB_SIE_CTRL_RESET_BUS_BITS;
-    usb_hw_set->sie_ctrl = USB_SIE_CTRL_STOP_TRANS_BITS;
-    busy_wait_us(10);
-    start_transaction(ep, usb_hw->sie_ctrl | USB_SIE_CTRL_START_TRANS_BITS);   
-    return 4000000;
-
-    /*
-    busy_wait_ms(1000);
-    #if CFG_TUSB_DEBUG
-    __breakpoint();
-    #endif
-    */
-
-
-    uint32_t calculated_ints = USB_INTS_BUFF_STATUS_BITS;
-    uint32_t actual_status = usb_hw->sie_status;
-    if (actual_status & USB_SIE_STATUS_TRANS_COMPLETE_BITS) {
-        calculated_ints |= USB_INTS_TRANS_COMPLETE_BITS;
-    } 
-    if (actual_status & USB_SIE_STATUS_DATA_SEQ_ERROR_BITS) {
-        calculated_ints |= USB_INTS_ERROR_DATA_SEQ_BITS;
-    } 
-    if (actual_status & USB_SIE_STATUS_RX_TIMEOUT_BITS) {
-        calculated_ints |= USB_INTS_ERROR_RX_TIMEOUT_BITS;
-    } 
-    if (actual_status & USB_SIE_STATUS_STALL_REC_BITS) {
-        calculated_ints |= USB_INTS_STALL_BITS;
-    } 
-    hcd_rp2040_irq_kernel(calculated_ints);
-    return 0;
+    //usb_hw_set->sie_ctrl = USB_SIE_CTRL_STOP_TRANS_BITS;
+    //busy_wait_us(10);
+    //start_transaction(ep, usb_hw->sie_ctrl | USB_SIE_CTRL_START_TRANS_BITS);   
+    //return 2000000;
+    hcd_event_t const event = {
+        .event_id = HCD_EVENT_RESET_ALL
+    };
+    hcd_event_handler(&event, true);
 }
 
 static void hcd_rp2040_irq(void) {
+    /*
     if (IRQ_logging) {
         struct hw_endpoint *ep;
         for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
@@ -378,7 +354,7 @@ static void hcd_rp2040_irq(void) {
             }
         }
     }
-    
+    */
 
     hcd_rp2040_irq_kernel(usb_hw->ints);
 }
@@ -537,7 +513,7 @@ bool hcd_init(uint8_t rhport)
     const uint32_t nak_poll_delay = 125; // increase the spacing between NAK auto-retries
     usb_hw->nak_poll = (nak_poll_delay << USB_NAK_POLL_DELAY_FS_LSB) | (nak_poll_delay << USB_NAK_POLL_DELAY_LS_LSB);
 
-    return true;
+    return true; USB_
 }
 
 void hcd_port_reset(uint8_t rhport)
@@ -680,15 +656,15 @@ void start_transaction(struct hw_endpoint* ep, uint32_t flags) {
         // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
         // usb_hw_clear->sie_ctrl = USB_SIE_CTRL_SOF_EN_BITS;  // This is an experiment, does no harm though.
 
-
+        /*
         assert(is_valid_buffer(*ep->buffer_control, *ep->endpoint_control, flags)==true);
         if (!is_valid_buffer(*ep->buffer_control, *ep->endpoint_control, flags)) printf("FAIL!!!!\n");
 
         sprintf(reportstring, "About to init trans ctrl [%x] with status [%x] buffer status [%x] (device %d ep %d endpoint control reg [%x] buffer control reg [%x] rx %x type %s remaining %d) %x %x %x %x %x %x\n", flags, usb_hw->sie_status, usb_hw->buf_status, ep->dev_addr, ep->ep_addr,
             *ep->endpoint_control, *ep->buffer_control, 
             ep->rx, xfer_type_str(ep->transfer_type), ep->remaining_len, usb_hw->dev_addr_ctrl, usb_hw->main_ctrl, usb_hw->sof_rd, usb_hw->int_ep_ctrl, usb_hw->buf_cpu_should_handle, usb_hw->muxing);
-
-        //busy_wait_us(1); // <-- This has been added because it causes the code to work most of the time!
+        */
+        busy_wait_us(1000); // <-- This has been added because it causes the code to work most of the time!
         usb_hw->sie_ctrl = flags;
 }
 
@@ -736,8 +712,8 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
         // Set pre if we are a low speed device on full speed hub
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
         //#define ALARM 500 // release with no logging
-        #define ALARM 4000000
-        hcd_backup_timer = add_alarm_in_us(ALARM, hcd_rp2040_timer_irq, 0, ep);
+        #define ALARM 2000000
+        hcd_backup_timer = add_alarm_in_us(ALARM, hcd_rp2040_timer_irq, 0, (void*)ep->rx);
         start_transaction(ep, flags);
     }else
     {
