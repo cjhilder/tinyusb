@@ -513,7 +513,7 @@ bool hcd_init(uint8_t rhport)
     const uint32_t nak_poll_delay = 125; // increase the spacing between NAK auto-retries
     usb_hw->nak_poll = (nak_poll_delay << USB_NAK_POLL_DELAY_FS_LSB) | (nak_poll_delay << USB_NAK_POLL_DELAY_LS_LSB);
 
-    return true; USB_
+    return true;
 }
 
 void hcd_port_reset(uint8_t rhport)
