@@ -492,7 +492,7 @@ void tuh_task(void)
         uint8_t const epnum   = tu_edpt_number(ep_addr);
         uint8_t const ep_dir  = tu_edpt_dir(ep_addr);
 
-        TU_LOG2("on dev %d EP %02X with %u bytes\r\n", event.dev_addr, ep_addr, (unsigned int) event.xfer_complete.len);
+        TU_LOG2("Task xfer complete: dev %d EP %02X with %u bytes\r\n", event.dev_addr, ep_addr, (unsigned int) event.xfer_complete.len);
 
         if (event.dev_addr == 0)
         {

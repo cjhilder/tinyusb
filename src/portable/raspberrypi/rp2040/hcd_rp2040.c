@@ -72,7 +72,9 @@ static struct hw_endpoint *get_dev_ep(uint8_t dev_addr, uint8_t ep_addr)
   for ( uint32_t i = 1; i < TU_ARRAY_SIZE(ep_pool); i++ )
   {
     struct hw_endpoint *ep = &ep_pool[i];
-    if ( ep->configured && (ep->dev_addr == dev_addr) && (tu_edpt_number(ep->ep_addr) == num) ) return ep;
+    if ( ep->configured && (ep->dev_addr == dev_addr) && (tu_edpt_number(ep->ep_addr) == num) ) {
+        return ep;
+    }
   }
 
   return NULL;
@@ -122,15 +124,18 @@ static bool need_pre(uint8_t dev_addr)
 static void hw_xfer_complete(struct hw_endpoint *ep, xfer_result_t xfer_result)
 {
     // Mark transfer as done before we tell the tinyusb stack
+    assert(ep);
     uint8_t dev_addr = ep->dev_addr;
     uint8_t ep_addr = ep->ep_addr;
     uint xferred_len = ep->xferred_len;
     hw_endpoint_reset_transfer(ep);
+    assert(!ep->user_buf);
     hcd_event_xfer_complete(dev_addr, ep_addr, xferred_len, xfer_result, true);
 }
 
 static void _handle_buff_status_bit(uint bit, struct hw_endpoint *ep)
 {
+    assert(ep);
     usb_hw_clear->buf_status = bit;
     bool done = hw_endpoint_xfer_continue(ep);
     if (done)
@@ -153,6 +158,7 @@ static void hw_handle_buff_status(void)
         struct hw_endpoint *ep = get_epx_ep();
         assert(ep);
         assert(ep->active);
+        assert(ep->endpoint_control);
         
         uint32_t ep_ctrl = *ep->endpoint_control;
         if (ep_ctrl & EP_CTRL_DOUBLE_BUFFERED_BITS)
@@ -330,6 +336,7 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
 static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t ep_addr, uint wMaxPacketSize, uint8_t transfer_type, uint8_t bmInterval)
 {
     // Already has data buffer, endpoint control, and buffer control allocated at this point
+    assert(ep);
     assert(ep->endpoint_control);
     assert(ep->buffer_control);
     assert(ep->hw_data_buf);
@@ -345,6 +352,7 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t 
 
     // Response to a setup packet on EP0 starts with pid of 1
     ep->next_pid = (num == 0 ? 1u : 0u);
+    assert(wMaxPacketSize <= 64);
     ep->wMaxPacketSize = wMaxPacketSize;
     ep->transfer_type = transfer_type;
 
@@ -469,7 +477,7 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr)
   for (size_t i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
   {
     hw_endpoint_t* ep = &ep_pool[i];
-
+    assert(ep);
     if (ep->dev_addr == dev_addr && ep->configured)
     {
       // in case it is an interrupt endpoint, disable it
@@ -488,6 +496,7 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr)
 uint32_t hcd_frame_number(uint8_t rhport)
 {
     (void) rhport;
+    assert(rhport == 0);
     return usb_hw->sof_rd;
 }
 
@@ -516,6 +525,7 @@ bool hcd_edpt_open(uint8_t rhport, uint8_t dev_addr, tusb_desc_endpoint_t const 
 
     // Allocated differently based on if it's an interrupt endpoint or not
     struct hw_endpoint *ep = _hw_endpoint_allocate(ep_desc->bmAttributes.xfer);
+    assert(ep);
 
     _hw_endpoint_init(ep,
         dev_addr,
@@ -530,6 +540,9 @@ bool hcd_edpt_open(uint8_t rhport, uint8_t dev_addr, tusb_desc_endpoint_t const 
 bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_t buflen)
 {
     (void) rhport;
+    assert(rhport == 0);
+    assert(buffer || (buflen == 0));
+    assert(buflen <= 512); // only applies to MSC
 
     pico_trace("hcd_edpt_xfer dev_addr %d, ep_addr 0x%x, len %d\n", dev_addr, ep_addr, buflen);
     
@@ -567,7 +580,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
         flags |= need_pre(dev_addr) ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0;
 
         // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
-        //busy_wait_ms(2); // <-- This has been added because it causes the code to work most of the time!
+        busy_wait_ms(1); // <-- This has been added because it causes the code to work most of the time!
         usb_hw->sie_ctrl = flags;
     }else
     {
@@ -580,6 +593,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
 bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet[8])
 {
     (void) rhport;
+    assert(rhport == 0);
 
     pico_trace("hcd_setup_send dev_addr %d\n", dev_addr);
 

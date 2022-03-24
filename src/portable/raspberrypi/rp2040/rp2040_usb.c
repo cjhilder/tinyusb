@@ -82,6 +82,7 @@ void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t 
     io_rw_16 and_mask = 0;
     io_rw_16 or_mask = 0;
     assert(val.index < 2);
+    assert(ep);
     io_rw_16 current = ep->buffer_control[val.index];
     switch (op) {
       case BUF_CTRL_OP_AND:
@@ -119,7 +120,11 @@ void _hw_endpoint_buffer_control_update16(struct hw_endpoint *ep, buf_ctrl_op_t 
 // prepare buffer, return buffer control
 static buffer_control_value_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
-  uint16_t const buflen = tu_min16(ep->remaining_len, ep->wMaxPacketSize);
+  assert(ep);
+  assert(buf_id < 2);
+
+  uint16_t buflen = tu_min16(ep->remaining_len, ep->wMaxPacketSize);
+  
   ep->remaining_len = (uint16_t)(ep->remaining_len - buflen);
 
   io_rw_16 buf_ctrl = buflen | USB_BUF_CTRL_AVAIL;
@@ -130,8 +135,15 @@ static buffer_control_value_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t 
 
   if ( !ep->rx )
   {
+    // transmit
     // Copy data from user buffer to hw buffer
-    memcpy(ep->hw_data_buf + buf_id*64, ep->user_buf, buflen);
+    assert((ep->user_buf && buflen) || (buflen == 0));
+    assert(buflen <= ep->wMaxPacketSize);
+    assert((ep->wMaxPacketSize == 64) || (buflen == 0));
+    if (buflen) {
+      TU_LOG(2, "Memory copy 0x%x to 0x%x with len %d\n", ep->user_buf, ep->hw_data_buf + buf_id*64, buflen);
+      memcpy(ep->hw_data_buf + buf_id*64, ep->user_buf, buflen);
+    }
     ep->user_buf += buflen;
 
     // Mark as full
@@ -155,6 +167,8 @@ static buffer_control_value_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t 
 // Prepare buffer control register value
 static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 {
+  assert(ep);
+  assert(ep->endpoint_control);
   uint32_t ep_ctrl = *ep->endpoint_control;
   buffer_control_value_t buf_ctrl_0 = {.value = 0, .index = 0};
   buffer_control_value_t buf_ctrl_1 = {.value = 0, .index = 1};
@@ -188,16 +202,20 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 
   *ep->endpoint_control = ep_ctrl;
 
-  TU_LOG(3, "  Prepare BufCtrl: (double=%d) [buf0] = 0x%x  [buf1] = 0x%x\r\n", double_buffered, buf_ctrl_0.value, buf_ctrl_1.value);
+  TU_LOG(2, "  Prepare BufCtrl: (double=%d) [buf0] = 0x%x  [buf1] = 0x%x\r\n", double_buffered, buf_ctrl_0.value, buf_ctrl_1.value);
 
   // Finally, write to buffer_control which will trigger the transfer
   // the next time the controller polls this dpram address
+  assert(buf_ctrl_0.index == 0);
+  assert(buf_ctrl_1.index == 1);
   _hw_endpoint_buffer_control_set_value16(ep, buf_ctrl_0);
   if (double_buffered) _hw_endpoint_buffer_control_set_value16(ep, buf_ctrl_1);
 }
 
 void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t total_len)
 {
+  assert(ep);
+  assert(buffer || (total_len == 0));
   _hw_endpoint_lock_update(ep, 1);
 
   if ( ep->active )
@@ -222,6 +240,9 @@ void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t to
 // sync endpoint buffer and return transferred bytes
 static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
+  assert(ep);
+  assert(buf_id < 2);
+
   volatile io_rw_16 buf_ctrl = _hw_endpoint_buffer_control_get_value16(ep, buf_id);
 
   uint16_t xferred_bytes = buf_ctrl & USB_BUF_CTRL_LEN_MASK;
@@ -240,7 +261,8 @@ static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
     // If we have received some data, so can increase the length
     // we have received AFTER we have copied it to the user buffer at the appropriate offset
     assert(buf_ctrl & USB_BUF_CTRL_FULL);
-
+    assert(ep->user_buf);
+    TU_LOG(2, "Memory copy 0x%x to 0x%x with len %d\n", ep->hw_data_buf + buf_id*64, ep->user_buf, xferred_bytes);
     memcpy(ep->user_buf, ep->hw_data_buf + buf_id*64, xferred_bytes);
     ep->xferred_len = (uint16_t)(ep->xferred_len + xferred_bytes);
     ep->user_buf += xferred_bytes;
@@ -261,6 +283,8 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
 {
   // Update hw endpoint struct with info from hardware
   // after a buff status interrupt
+  assert(ep);
+  assert(ep->endpoint_control);
 
   io_rw_16 __unused buf_ctrl_0 = _hw_endpoint_buffer_control_get_value16(ep, 0);
   io_rw_16 __unused buf_ctrl_1 = _hw_endpoint_buffer_control_get_value16(ep, 1);
@@ -311,6 +335,8 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
 // Returns true if transfer is complete
 bool hw_endpoint_xfer_continue(struct hw_endpoint *ep)
 {
+  assert(ep);
+
   _hw_endpoint_lock_update(ep, 1);
   // Part way through a transfer
   if (!ep->active)
