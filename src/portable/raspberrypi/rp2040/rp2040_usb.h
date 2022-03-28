@@ -23,15 +23,7 @@
 // Hardware information per endpoint
 typedef struct hw_endpoint
 {
-    // Is this a valid struct
-    bool configured;
-    
-    // Transfer direction (i.e. IN is rx for host but tx for device)
-    // allows us to common up transfer functions
-    bool rx;
-    
-    uint8_t ep_addr;
-    uint8_t next_pid;
+    uint16_t guard_FFFD;
 
     // Endpoint control register
     io_rw_32 *endpoint_control;
@@ -42,13 +34,28 @@ typedef struct hw_endpoint
     // Buffer pointer in usb dpram
     uint8_t *hw_data_buf;
 
+    // User buffer in main memory
+    uint8_t     *user_buf;
+    uint8_t     *user_buf_base;
+    uint8_t     user_buf_lower_guard;
+    uint8_t     user_buf_upper_guard;
+    uint16_t    user_buf_size;
+    
+    uint16_t guard_FFFE;
+    
+    bool configured;
+    
+    // Transfer direction (i.e. IN is rx for host but tx for device)
+    // allows us to common up transfer functions
+    bool rx;
+    
+    uint8_t ep_addr;
+    uint8_t next_pid;
+
     // Current transfer information
     bool active;
     uint16_t remaining_len;
     uint16_t xferred_len;
-
-    // User buffer in main memory
-    uint8_t *user_buf;
 
     // Data needed from EP descriptor
     uint16_t wMaxPacketSize;
@@ -63,7 +70,16 @@ typedef struct hw_endpoint
     // If interrupt endpoint
     uint8_t interrupt_num;
 #endif
+    uint16_t guard_FFFF;    
 } hw_endpoint_t;
+
+#define CHECK_GUARDS(x) assert(x->guard_FFFD == 0xFFFD); \
+                        assert(x->guard_FFFE == 0xFFFE); \
+                        assert(x->guard_FFFF == 0xFFFF); \
+                        assert(x->interrupt_num < USB_MAX_ENDPOINTS); \
+                        if (ep->user_buf) assert(ep->user_buf_lower_guard == *(ep->user_buf_base - 1)); \
+                        if (ep->user_buf) assert(ep->user_buf_upper_guard == *(ep->user_buf_base + ep->user_buf_size));
+
 
 void rp2040_usb_init(void);
 

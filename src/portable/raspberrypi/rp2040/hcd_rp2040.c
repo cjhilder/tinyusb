@@ -72,7 +72,10 @@ static struct hw_endpoint *get_dev_ep(uint8_t dev_addr, uint8_t ep_addr)
   for ( uint32_t i = 1; i < TU_ARRAY_SIZE(ep_pool); i++ )
   {
     struct hw_endpoint *ep = &ep_pool[i];
-    if ( ep->configured && (ep->dev_addr == dev_addr) && (tu_edpt_number(ep->ep_addr) == num) ) return ep;
+    if ( ep->configured && (ep->dev_addr == dev_addr) && (tu_edpt_number(ep->ep_addr) == num) ) {
+        CHECK_GUARDS(ep)
+        return ep;
+    }
   }
 
   return NULL;
@@ -83,12 +86,14 @@ static struct hw_endpoint *get_epx_ep(void)
     uint8_t dev_addr = (usb_hw->dev_addr_ctrl & USB_ADDR_ENDP_ADDRESS_BITS) >> USB_ADDR_ENDP_ADDRESS_LSB;
     uint8_t ep_addr = (usb_hw->dev_addr_ctrl & USB_ADDR_ENDP_ENDPOINT_BITS) >> USB_ADDR_ENDP_ENDPOINT_LSB;
     pico_trace("  epx dev %d ep %d\n", dev_addr, ep_addr);
-
-    return get_dev_ep(dev_addr, ep_addr);
+    struct hw_endpoint *ep = get_dev_ep(dev_addr, ep_addr);
+    CHECK_GUARDS(ep)
+    return ep;
 }
 
 static uint8_t ep_slot(struct hw_endpoint *ep)
 {
+    CHECK_GUARDS(ep)
     return (ep - &epx);
 }
 
@@ -122,21 +127,28 @@ static bool need_pre(uint8_t dev_addr)
 static void hw_xfer_complete(struct hw_endpoint *ep, xfer_result_t xfer_result)
 {
     // Mark transfer as done before we tell the tinyusb stack
+    assert(ep);
+    CHECK_GUARDS(ep)
     uint8_t dev_addr = ep->dev_addr;
     uint8_t ep_addr = ep->ep_addr;
     uint xferred_len = ep->xferred_len;
     hw_endpoint_reset_transfer(ep);
     hcd_event_xfer_complete(dev_addr, ep_addr, xferred_len, xfer_result, true);
+    CHECK_GUARDS(ep)
 }
 
 static void _handle_buff_status_bit(uint bit, struct hw_endpoint *ep)
 {
     usb_hw_clear->buf_status = bit;
+    assert(ep);
+    CHECK_GUARDS(ep)
     bool done = hw_endpoint_xfer_continue(ep);
+    CHECK_GUARDS(ep)
     if (done)
     {
         hw_xfer_complete(ep, XFER_RESULT_SUCCESS);
     }
+    CHECK_GUARDS(ep)
 }
 
 static void hw_handle_buff_status(void)
@@ -155,7 +167,7 @@ static void hw_handle_buff_status(void)
         assert(ep);
         assert(ep->active);
         #endif
-        
+        CHECK_GUARDS(ep)
         uint32_t ep_ctrl = *ep->endpoint_control;
         if (ep_ctrl & EP_CTRL_DOUBLE_BUFFERED_BITS)
         {
@@ -205,8 +217,9 @@ static void hw_trans_complete(void)
     assert(ep);
     assert(ep->active);
     #endif
-
+    CHECK_GUARDS(ep)
     hw_xfer_complete(ep, XFER_RESULT_SUCCESS);
+    CHECK_GUARDS(ep)
   }
   else
   {
@@ -301,6 +314,8 @@ static int64_t hcd_rp2040_timer_irq(alarm_id_t id, void* data) {
     for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
     {
         ep = &ep_pool[i];
+        assert(ep);
+        CHECK_GUARDS(ep)
         if (ep->configured && ep->rx == dir)
         {
             break;
@@ -359,6 +374,13 @@ static void hcd_rp2040_irq(void) {
     hcd_rp2040_irq_kernel(usb_hw->ints);
 }
 
+void _zero_ep(struct hw_endpoint *ep) {
+    memset(ep, 0, sizeof(hw_endpoint_t));
+    ep->guard_FFFD = 0xFFFD;
+    ep->guard_FFFE = 0xFFFE;
+    ep->guard_FFFF = 0xFFFF;
+}
+
 static struct hw_endpoint *_next_free_ep(uint8_t transfer_type)
 {
     if (transfer_type == TUSB_XFER_CONTROL)
@@ -367,8 +389,11 @@ static struct hw_endpoint *_next_free_ep(uint8_t transfer_type)
     for (uint i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
     {
         struct hw_endpoint *ep = &ep_pool[i];
+        assert(ep);
+        CHECK_GUARDS(ep)
         if (!ep->configured)
         {
+            _zero_ep(ep);
             // Will be configured by _hw_endpoint_init / _hw_endpoint_allocate
             ep->transfer_type = transfer_type;
             ep->interrupt_num = i - 1;
@@ -386,6 +411,8 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
     #if CFG_TUSB_DEBUG
     assert(ep);
     #endif
+    CHECK_GUARDS(ep)
+
 
     if (transfer_type == TUSB_XFER_INTERRUPT)
     {
@@ -405,13 +432,15 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
         ep->endpoint_control = &usbh_dpram->epx_ctrl;
         ep->hw_data_buf = &usbh_dpram->epx_data[0];
     }
-
+    CHECK_GUARDS(ep)
     return ep;
 }
 
 static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t ep_addr, uint wMaxPacketSize, uint8_t transfer_type, uint8_t bmInterval)
 {
     // Already has data buffer, endpoint control, and buffer control allocated at this point
+    assert(ep);
+    CHECK_GUARDS(ep)
     #if CFG_TUSB_DEBUG
     assert(ep->endpoint_control);
     assert(ep->buffer_control);
@@ -476,6 +505,7 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t 
         // If it's an interrupt endpoint we need to set up the buffer control
         // register
     }
+    CHECK_GUARDS(ep)
 }
 
 //--------------------------------------------------------------------+
@@ -498,6 +528,11 @@ bool hcd_init(uint8_t rhport)
 
     // clear epx and interrupt eps
     memset(&ep_pool, 0, sizeof(ep_pool));
+    for (size_t i = 0; i < TU_ARRAY_SIZE(ep_pool); i++) {
+        hw_endpoint_t* ep = &ep_pool[i];
+        assert(ep);
+        _zero_ep(ep);
+    }
 
     // Enable in host mode with SOF / Keep alive on
     usb_hw->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS | USB_MAIN_CTRL_HOST_NDEVICE_BITS;
@@ -564,6 +599,8 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr)
   for (size_t i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
   {
     hw_endpoint_t* ep = &ep_pool[i];
+    assert(ep);
+    CHECK_GUARDS(ep)
 
     if (ep->dev_addr == dev_addr && ep->configured)
     {
@@ -622,7 +659,8 @@ bool hcd_edpt_open(uint8_t rhport, uint8_t dev_addr, tusb_desc_endpoint_t const 
         tu_edpt_packet_size(ep_desc),
         ep_desc->bmAttributes.xfer,
         ep_desc->bInterval);
-
+    assert(ep);
+    CHECK_GUARDS(ep)
     return true;
 }
 
@@ -653,6 +691,8 @@ bool is_valid_buffer(uint32_t bufctrl, uint32_t epctrl, uint32_t siectrl) {
 }
 
 void start_transaction(struct hw_endpoint* ep, uint32_t flags) {
+    assert(ep);
+    CHECK_GUARDS(ep)
         // TODO: Work out why this delay needs to be added, and replace it with something more suitable.
         // usb_hw_clear->sie_ctrl = USB_SIE_CTRL_SOF_EN_BITS;  // This is an experiment, does no harm though.
 
@@ -683,6 +723,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
     #if CFG_TUSB_DEBUG
     assert(ep);
     #endif
+    CHECK_GUARDS(ep)
 
     // Control endpoint can change direction 0x00 <-> 0x80
     if ( ep_addr != ep->ep_addr )
@@ -734,6 +775,8 @@ bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet
 
     // Configure EP0 struct with setup info for the trans complete
     struct hw_endpoint *ep = _hw_endpoint_allocate(TUSB_XFER_CONTROL);
+    assert(ep);
+    CHECK_GUARDS(ep)
 
     // EP0 out
     _hw_endpoint_init(ep, dev_addr, 0x00, ep->wMaxPacketSize, 0, 0);

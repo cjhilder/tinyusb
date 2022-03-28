@@ -71,6 +71,8 @@ void rp2040_usb_init(void)
 
 void hw_endpoint_reset_transfer(struct hw_endpoint *ep)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
   ep->active = false;
   ep->remaining_len = 0;
   ep->xferred_len = 0;
@@ -78,6 +80,8 @@ void hw_endpoint_reset_transfer(struct hw_endpoint *ep)
 }
 
 void _hw_endpoint_buffer_control_update32(struct hw_endpoint *ep, uint32_t and_mask, uint32_t or_mask) {
+    assert(ep);
+    CHECK_GUARDS(ep)
     uint32_t value = 0;
     if (and_mask) {
         value = *ep->buffer_control & and_mask;
@@ -118,6 +122,8 @@ void _hw_endpoint_buffer_control_update32(struct hw_endpoint *ep, uint32_t and_m
 // prepare buffer, return buffer control
 static uint32_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
   uint16_t const buflen = tu_min16(ep->remaining_len, ep->wMaxPacketSize);
   ep->remaining_len = (uint16_t)(ep->remaining_len - buflen);
 
@@ -153,6 +159,9 @@ static uint32_t prepare_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 // Prepare buffer control register value
 static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
+
   uint32_t ep_ctrl = *ep->endpoint_control;
 
   // always compute and start with buffer 0
@@ -191,6 +200,8 @@ static void _hw_endpoint_start_next_buffer(struct hw_endpoint *ep)
 
 void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t total_len)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
   _hw_endpoint_lock_update(ep, 1);
 
   if ( ep->active )
@@ -201,12 +212,16 @@ void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t to
 
     hw_endpoint_reset_transfer(ep);
   }
-
+  
   // Fill in info now that we're kicking off the hw
   ep->remaining_len = total_len;
   ep->xferred_len   = 0;
   ep->active        = true;
   ep->user_buf      = buffer;
+  ep->user_buf_base = buffer;
+  ep->user_buf_size = total_len;
+  if (buffer) ep->user_buf_lower_guard = *(buffer - 1);
+  if (buffer) ep->user_buf_upper_guard = *(buffer + total_len);
 
   _hw_endpoint_start_next_buffer(ep);
   _hw_endpoint_lock_update(ep, -1);
@@ -215,6 +230,9 @@ void hw_endpoint_xfer_start(struct hw_endpoint *ep, uint8_t *buffer, uint16_t to
 // sync endpoint buffer and return transferred bytes
 static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
+
   uint32_t buf_ctrl = _hw_endpoint_buffer_control_get_value32(ep);
   if (buf_id)  buf_ctrl = buf_ctrl >> 16;
 
@@ -236,8 +254,12 @@ static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
     #if CFG_TUSB_DEBUG
     assert(buf_ctrl & USB_BUF_CTRL_FULL);
     #endif
-
-    memcpy(ep->user_buf, ep->hw_data_buf + buf_id*64, xferred_bytes);
+    CHECK_GUARDS(ep)
+    if (xferred_bytes) {
+      assert(ep->user_buf);
+      memcpy(ep->user_buf, ep->hw_data_buf + buf_id*64, xferred_bytes);
+    }
+    CHECK_GUARDS(ep)
     ep->xferred_len = (uint16_t)(ep->xferred_len + xferred_bytes);
     ep->user_buf += xferred_bytes;
   }
@@ -249,7 +271,7 @@ static uint16_t sync_ep_buffer(struct hw_endpoint *ep, uint8_t buf_id)
     // Reduce total length as this is last packet
     ep->remaining_len = 0;
   }
-
+  CHECK_GUARDS(ep)
   return xferred_bytes;
 }
 
@@ -257,12 +279,15 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
 {
   // Update hw endpoint struct with info from hardware
   // after a buff status interrupt
+  assert(ep);
+  CHECK_GUARDS(ep)
 
   uint32_t __unused buf_ctrl = _hw_endpoint_buffer_control_get_value32(ep);
   TU_LOG(3, "  Sync BufCtrl: [0] = 0x%04u  [1] = 0x%04x\r\n", tu_u32_low16(buf_ctrl), tu_u32_high16(buf_ctrl));
 
   // always sync buffer 0
   uint16_t buf0_bytes = sync_ep_buffer(ep, 0);
+  CHECK_GUARDS(ep)
 
   // sync buffer 1 if double buffered
   if ( (*ep->endpoint_control) & EP_CTRL_DOUBLE_BUFFERED_BITS )
@@ -271,6 +296,7 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
     {
       // sync buffer 1 if not short packet
       sync_ep_buffer(ep, 1);
+      CHECK_GUARDS(ep)
     }else
     {
       // short packet on buffer 0
@@ -306,6 +332,8 @@ static void _hw_endpoint_xfer_sync (struct hw_endpoint *ep)
 // Returns true if transfer is complete
 bool hw_endpoint_xfer_continue(struct hw_endpoint *ep)
 {
+  assert(ep);
+  CHECK_GUARDS(ep)
   _hw_endpoint_lock_update(ep, 1);
   // Part way through a transfer
   if (!ep->active)
@@ -315,7 +343,9 @@ bool hw_endpoint_xfer_continue(struct hw_endpoint *ep)
   }
 
   // Update EP struct from hardware state
+  CHECK_GUARDS(ep)
   _hw_endpoint_xfer_sync(ep);
+  CHECK_GUARDS(ep)
 
   // Now we have synced our state with the hardware. Is there more data to transfer?
   // If we are done then notify tinyusb
@@ -329,7 +359,9 @@ bool hw_endpoint_xfer_continue(struct hw_endpoint *ep)
   }
   else
   {
+  CHECK_GUARDS(ep)
     _hw_endpoint_start_next_buffer(ep);
+  CHECK_GUARDS(ep)
   }
 
   _hw_endpoint_lock_update(ep, -1);
